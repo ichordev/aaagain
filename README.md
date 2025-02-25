@@ -6,18 +6,19 @@ A copy of the associative array implementation from DRuntime, but with no relian
 The interface is almost identical to the built-in associative array, but with a few small differences:
 ```d
 import aaagain;
-SomeAllocator alloc;
-SomeOtherAllocator alloc2;
 
-//AA must be explicitly allocated:
-auto myAA = AA(string, int, SomeAllocator)(alloc);
+SomeAllocator alloc, alloc2;
+SomeOtherAllocator alloc3;
+
 /*
-Alternative syntax: you can use one allocator for the AA itself,
-and a different allocator for the AA's entries/buckets:
+AA must be explicitly allocated.
+You can specify different allocators for allocating the AA itself, its buckets, and its entries.
+The allocator instance for buckets and entries can be the same if they are a global allocator.
 */
-auto myAA = AA!(string, int, SomeAllocator)(
-	aaAllocator: alloc,
-	bucketAllocator: alloc2,
+auto myAA = newAA!(string, int)(
+	aaAllocator: alloc3,
+	bucketAllocator: alloc,
+	entryAllocator: alloc2,
 );
 
 myAA["twenty"] = 20;
@@ -61,9 +62,9 @@ myAA.remove("fifty");
 import memterface.ctor: dispose;
 
 //there is `.getKeys` instead of `.keys`, which uses manual memory management:
-auto keyArray = myAA.getKeys(alloc2);
+auto keyArray = myAA.getKeys(alloc3);
 assert(keyArray == ["twenty"]);
-alloc2.dispose(keyArray);
+alloc3.dispose(keyArray);
 
 //Likewise for `.values`:
 auto valueArray = myAA.getValues(alloc2);
@@ -83,7 +84,7 @@ foreach(item; myAA.byKeyValue){
 }
 
 //Must explicitly destroy AA with the same allocator that allocated it:
-myAA.dispose(alloc);
+myAA.dispose(alloc3);
 ```
 
 The `AA` type is just a container for a pointer, just like the built-in associative array:

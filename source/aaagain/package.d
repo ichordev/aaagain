@@ -20,16 +20,17 @@ struct AAParams{
 	///Growth factor.
 	uint growFactor=4;
 }
+
 //magic hash constants to distinguish empty, deleted, and filled buckets
 private enum HASH_EMPTY = 0;
 private enum HASH_DELETED = 0x1;
 private enum HASH_FILLED_MARK = size_t(1) << 8 * size_t.sizeof - 1;
 
-enum isAA(T) = is(T: AA!(K, V, A, params), K, V, A, AAParams params);
-enum isAA(T, Key, Value) = is(T: AA!(K, V, A, params), K: Key, V: Value, A, AAParams params);
+enum isAA(T) = is(T: AA!(K, V, BA, EA, params), K, V, BA, EA, AAParams params);
+enum isAA(T, Key, Value) = is(T: AA!(K, V, BA, EA, params), K: Key, V: Value, BA, EA, AAParams params);
 
-struct AA(K, V, Allocator=GCAllocator, AAParams params=AAParams.init)
-if(isAllocator!Allocator){
+struct AA(K, V, BucketAllocator=GCAllocator, EntryAllocator=GCAllocator, AAParams params=AAParams.init)
+if(isAllocator!BucketAllocator && isAllocator!EntryAllocator){
 	alias Key = K;
 	alias Value = V;
 	
@@ -42,33 +43,23 @@ if(isAllocator!Allocator){
 	enum initialLoad = (params.growDenominator * params.shrink + params.grow * params.shrinkDenominator) / 2;
 	enum initialLoadDenominator = params.shrinkDenominator * params.growDenominator;
 	
-	private struct Entry{
-		Key key;
-		Value value;
-	}
-	private struct Bucket{
-		size_t hash = HASH_EMPTY;
-		Entry* entry;
-		
-		pragma(inline,true) nothrow @nogc pure @safe{
-			@property bool empty() const   => hash == HASH_EMPTY;
-			@property bool deleted() const => hash == HASH_DELETED;
-			@property bool filled() const  => cast(ptrdiff_t)hash < 0;
-		}
-	}
+	private alias Bucket = AABucket!(Key, Value);
+	private alias Entry = Bucket.Entry;
 	private struct Impl{
 		enum initialBucketCount = params.growFactor * 2;
 		
 		private{
-			Allocator allocator;
+			BucketAllocator bucketAllocator;
+			EntryAllocator entryAllocator;
 			Bucket[] buckets;
 			uint used, deleted;
 			uint firstUsed;
 		}
 		
-		this()(auto ref Allocator allocator, size_t size=initialBucketCount) nothrow{
-			this.allocator = allocator;
-			this.buckets = this.allocator.newArray!Bucket(size);
+		this()(auto ref BucketAllocator bucketAllocator, auto ref EntryAllocator entryAllocator, size_t size=initialBucketCount){
+			this.bucketAllocator = bucketAllocator;
+			this.entryAllocator = entryAllocator;
+			this.buckets = this.bucketAllocator.newArray!Bucket(size);
 			this.firstUsed = cast(uint)buckets.length;
 		}
 		
@@ -139,7 +130,7 @@ if(isAllocator!Allocator){
 		
 		void resize(size_t newSize){
 			auto oldBuckets = buckets;
-			buckets = this.allocator.newArray!Bucket(newSize);
+			buckets = this.bucketAllocator.newArray!Bucket(newSize);
 			
 			foreach(ref oldBucket; oldBuckets[firstUsed..$])
 				if(oldBucket.filled)
@@ -148,7 +139,7 @@ if(isAllocator!Allocator){
 			firstUsed = 0;
 			used -= deleted;
 			deleted = 0;
-			this.allocator.dispose(oldBuckets); //safe to free b/c impossible to reference
+			(() nothrow @trusted => this.bucketAllocator.dispose(oldBuckets))(); //safe to free b/c impossible to reference
 		}
 		
 		inout(Value)* inX(scope ref const Key key) inout{
@@ -188,7 +179,7 @@ if(isAllocator!Allocator){
 			//update search cache and allocate entry
 			firstUsed = min(firstUsed, (() @trusted => cast(uint)(p - buckets.ptr))());
 			p.hash = hash;
-			p.entry = this.allocator.constructNew!Entry(key);
+			p.entry = this.entryAllocator.constructNew!Entry(key);
 			//return pointer to value
 			return Result(&p.entry.value);
 		}
@@ -198,21 +189,26 @@ if(isAllocator!Allocator){
 	/**
 	Allocate a new associative array. `aaAllocator` must be used to `dispose` of this associative array later.
 	
-	Params:
-		aaAllocator = The allocator with which to allocate the associative array itself.
-		bucketAllocator = The allocator to allocate buckets & entries within the associative array.
-	*/
-	this(AAAllocator)(auto ref AAAllocator aaAllocator, auto ref Allocator bucketAllocator) nothrow{
-		this.impl = aaAllocator.constructNew!Impl(bucketAllocator);
-	}
-	/**
-	Allocate a new associative array. `allocator` must be used to `dispose` of associative array later.
+	`bucketAllocator` and `entryAllocator` can only be the same if they are a global allocator.
 	
 	Params:
-		allocator = The allocator with which to allocate the associative array, and its buckets & entries.
+		aaAllocator = Used to allocate the associative array itself.
+		bucketAllocator = Used to allocate the buckets within the associative array.
+		entryAllocator = Used to allocate the entries within the associative array.
 	*/
-	this()(auto ref Allocator allocator) nothrow{
-		this.impl = allocator.constructNew!Impl(allocator);
+	this(AAAllocator)(auto ref AAAllocator aaAllocator, auto ref BucketAllocator bucketAllocator, auto ref EntryAllocator entryAllocator)
+	if(isAllocator!AAAllocator){
+		static if(__traits(compiles, BucketAllocator.init == EntryAllocator.init) && !isGlobal!BucketAllocator && !isGlobal!EntryAllocator){
+			assert(bucketAllocator != entryAllocator, "The allocators for buckets and for entries must be separate instances");
+		}
+		this.impl = aaAllocator.constructNew!Impl(bucketAllocator, entryAllocator);
+	}
+	
+	static if(is(BucketAllocator: EntryAllocator) && isGlobal!BucketAllocator){
+		this(AAAllocator)(auto ref AAAllocator aaAllocator, auto ref BucketAllocator bucketEntryAllocator)
+		if(isAllocator!AAAllocator){
+			this.impl = aaAllocator.constructNew!Impl(bucketEntryAllocator, bucketEntryAllocator);
+		}
 	}
 	
 	/**
@@ -221,7 +217,7 @@ if(isAllocator!Allocator){
 	void dispose(AAAllocator)(auto ref AAAllocator aaAllocator){
 		impl.assertWasInit();
 		clear();
-		impl.allocator.dispose(impl.buckets);
+		impl.bucketAllocator.dispose(impl.buckets);
 		aaAllocator.dispose(impl);
 	}
 	
@@ -278,7 +274,7 @@ if(isAllocator!Allocator){
 			if(auto p = impl.findSlotLookup(impl.calcHash(key), key)){
 				//clear entry
 				p.hash = HASH_DELETED;
-				impl.allocator.dispose(p.entry);
+				impl.entryAllocator.dispose(p.entry);
 				p.entry = null;
 				
 				++impl.deleted;
@@ -294,7 +290,7 @@ if(isAllocator!Allocator){
 	/**
 	Returns: An array allocated with `allocator`, the elements of which are the keys in the associative array.
 	
-	The returned array must later be deallocated with `allocator`.
+	The returned array must later be deallocated using the same `allocator`.
 	*/
 	inout(Key[]) getKeys(Allocator)(auto ref Allocator allocator) inout{
 		if(impl.empty) return null;
@@ -312,7 +308,7 @@ if(isAllocator!Allocator){
 	/**
 	Returns: An array allocated with `allocator`, the elements of which are the values in the associative array.
 	
-	The returned array must later be deallocated with `allocator`.
+	The returned array must later be deallocated using the same `allocator`.
 	*/
 	inout(Value[]) getValues(Allocator)(auto ref Allocator allocator) inout{
 		if(impl.empty) return null;
@@ -340,7 +336,7 @@ if(isAllocator!Allocator){
 		//clear all data, but don't change bucket array length
 		foreach(ref bucket; impl.buckets[impl.firstUsed..$]){
 			if(bucket.filled)
-				impl.allocator.dispose(bucket.entry);
+				impl.entryAllocator.dispose(bucket.entry);
 		}
 		memset(&impl.buckets[impl.firstUsed], 0, (impl.buckets.length - impl.firstUsed) * Bucket.sizeof);
 		impl.deleted = impl.used = 0;
@@ -482,23 +478,81 @@ if(isAllocator!Allocator){
 	}
 }
 
+struct AAEntry(K, V){
+	const K key;
+	V value;
+}
+
+struct AABucket(K, V){
+	alias Entry = AAEntry!(K, V);
+	size_t hash = HASH_EMPTY;
+	Entry* entry;
+	
+	pragma(inline,true) nothrow @nogc pure @safe{
+		@property bool empty() const   => hash == HASH_EMPTY;
+		@property bool deleted() const => hash == HASH_DELETED;
+		@property bool filled() const  => cast(ptrdiff_t)hash < 0;
+	}
+}
+
+/**
+Allocate a new associative array. `aaAllocator` must be used to `dispose` of this associative array later.
+
+`bucketAllocator` and `entryAllocator` can only be the same if they are a global allocator.
+
+Params:
+	aaAllocator = Used to allocate the associative array itself.
+	bucketAllocator = Used to allocate the buckets within the associative array.
+	entryAllocator = Used to allocate the entries within the associative array.
+*/
+pragma(inline,true)
+auto newAA(Key, Value, AAParams params=AAParams.init, AAAllocator, BucketAllocator, EntryAllocator)(
+	auto ref AAAllocator aaAllocator, auto ref BucketAllocator bucketAllocator, auto ref EntryAllocator entryAllocator,
+) =>
+	AA!(Key, Value, BucketAllocator, EntryAllocator, params)(aaAllocator, bucketAllocator, entryAllocator);
+
+unittest{
+	auto aa = newAA!(char[], long)(GCAllocator(), GCAllocator(), GCAllocator());
+}
+
+/**
+Allocate a new associative array. `aaAllocator` must be used to `dispose` of this associative array later.
+
+`bucketEntryAllocator` must be a global allocator.
+
+Params:
+	aaAllocator = Used to allocate the associative array itself.
+	bucketEntryAllocator = Used to allocate the buckets & entries within the associative array.
+*/
+pragma(inline,true)
+auto newAA(Key, Value, AAParams params=AAParams.init, AAAllocator, BucketEntryAllocator)(
+	auto ref AAAllocator aaAllocator, auto ref BucketEntryAllocator bucketEntryAllocator,
+){
+	static assert(isGlobal!BucketEntryAllocator, "`bucketEntryAllocator` must be a global allocator");
+	return AA!(Key, Value, BucketEntryAllocator, BucketEntryAllocator, params)(aaAllocator, bucketEntryAllocator, bucketEntryAllocator);
+}
+unittest{
+	auto aa = newAA!(char[], long)(GCAllocator(), GCAllocator());
+}
+
 /**
 Construct an associative array from pairs of keys and values,
-allocated with `aaAllocator` and `bucketAllocator`.
+allocated with `aaAllocator`, `bucketAllocator`, and `entryAllocator`.
 
 Returns: A new associative array, or `null` if `keysValues` is empty.
 */
-auto makeAA(AAParams params=AAParams.init, AAAllocator, BucketAllocator, KVs...)(
-	auto ref AAAllocator aaAllocator, auto ref BucketAllocator bucketAllocator, auto ref KVs keysValues,
+auto makeAA(AAParams params=AAParams.init, AAAllocator, BucketAllocator, EntryAllocator, KVs...)(
+	auto ref AAAllocator aaAllocator, auto ref BucketAllocator bucketAllocator, auto ref EntryAllocator entryAllocator, auto ref KVs keysValues,
 ) nothrow{
 	static assert((KVs.length & 1) == 0, "Must provide an even number of arguments to `keysValues`");
 	static if(KVs.length >= 2){
 		alias Key = KVs[0];
 		alias Value = KVs[1];
-		alias AAT = AA!(Key, Value, BucketAllocator, params);
+		alias AAT = AA!(Key, Value, BucketAllocator, EntryAllocator, params);
 		AAT aa;
 		aa.impl = aaAllocator.constructNew!(AAT.Impl)(
 			bucketAllocator,
+			entryAllocator,
 			nextPow2(AAT.initialLoadDenominator * (KVs.length/2) / AAT.initialLoad),
 		);
 		
@@ -513,7 +567,7 @@ auto makeAA(AAParams params=AAParams.init, AAAllocator, BucketAllocator, KVs...)
 			if(p is null){
 				p = aa.impl.findSlotInsert(hash);
 				p.hash = hash;
-				p.entry = aa.impl.allocator.constructNew!(AAT.Entry)(keysValues[ind+0], keysValues[ind+1]);
+				p.entry = aa.impl.entryAllocator.constructNew!(AAT.Entry)(keysValues[ind+0], keysValues[ind+1]);
 				aa.impl.firstUsed = min(aa.impl.firstUsed, (() @trusted => cast(uint)(p - aa.impl.buckets.ptr))());
 				actualLength++;
 				moveEmplace(keysValues[ind+1], p.entry.value);
@@ -532,9 +586,10 @@ unittest{
 	
 	CAllocator cAlloc;
 	GCAllocator gcAlloc;
-	auto aa = AA!(string, int, CAllocator)(
+	auto aa = AA!(string, int, CAllocator, GCAllocator)(
 		aaAllocator: gcAlloc,
 		bucketAllocator: cAlloc,
+		entryAllocator: gcAlloc,
 	);
 	
 	aa["twenty"] = 20;
@@ -557,7 +612,7 @@ unittest{
 	);
 	assert(aa["fifty"] == 51);
 	{
-		auto aaCmp = makeAA(gcAlloc, cAlloc, "twenty",20, "fifty",51);
+		auto aaCmp = makeAA(gcAlloc, gcAlloc, cAlloc, "twenty",20, "fifty",51);
 		scope(exit) aaCmp.dispose(gcAlloc);
 		assert(aa == aaCmp);
 	}
@@ -587,7 +642,7 @@ unittest{
 	foreach(i; 0..10)
 		aa[i.to!string()] = i;
 	{
-		auto aaCmp = makeAA(cAlloc, gcAlloc, "twenty",20, "0",0, "1",1, "2",2, "3",3, "4",4, "5",5, "6",6, "7",7, "8",8, "9",9);
+		auto aaCmp = makeAA(cAlloc, gcAlloc, gcAlloc, "twenty",20, "0",0, "1",1, "2",2, "3",3, "4",4, "5",5, "6",6, "7",7, "8",8, "9",9);
 		scope(exit) aaCmp.dispose(cAlloc);
 		assert(aa == aaCmp);
 	}

@@ -3,7 +3,7 @@
 	"description": "Associative arrays with support for custom allocators.",
 	"authors": ["Aya Partridge", "Martin Nowak"],
 	"license": "BSL-1.0",
-	"copyright": "Digital Mars",
+	"copyright": "Copyright Digital Mars",
 	
 	"dependencies": {"memterface": "~>1.0"},
 	"targetType": "staticLibrary",
