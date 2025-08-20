@@ -44,7 +44,9 @@ if(isAllocator!BucketAllocator && isAllocator!EntryAllocator){
 	enum initialLoadDenominator = params.shrinkDenominator * params.growDenominator;
 	
 	private alias Bucket = AABucket!(Key, Value);
+	
 	private alias Entry = Bucket.Entry;
+	
 	private struct Impl{
 		enum initialBucketCount = params.growFactor * 2;
 		
@@ -169,8 +171,7 @@ if(isAllocator!BucketAllocator && isAllocator!EntryAllocator){
 			auto p = findSlotInsert(hash);
 			if(p.deleted){
 				--this.deleted;
-				//check load factor and possibly grow:
-			}else if(++this.used * params.growDenominator > buckets.length * params.grow){
+			}else if(++this.used * params.growDenominator > buckets.length * params.grow){ //check load factor and possibly grow
 				grow();
 				p = findSlotInsert(hash);
 				assert(p.empty);
@@ -196,7 +197,7 @@ if(isAllocator!BucketAllocator && isAllocator!EntryAllocator){
 		bucketAllocator = Used to allocate the buckets within the associative array.
 		entryAllocator = Used to allocate the entries within the associative array.
 	*/
-	this(AAAllocator)(auto ref AAAllocator aaAllocator, auto ref BucketAllocator bucketAllocator, auto ref EntryAllocator entryAllocator)
+	this(AAAllocator)(scope auto ref AAAllocator aaAllocator, auto ref BucketAllocator bucketAllocator, auto ref EntryAllocator entryAllocator)
 	if(isAllocator!AAAllocator){
 		static if(__traits(compiles, BucketAllocator.init == EntryAllocator.init) && !isGlobal!BucketAllocator && !isGlobal!EntryAllocator){
 			assert(bucketAllocator != entryAllocator, "The allocators for buckets and for entries must be separate instances");
@@ -214,7 +215,7 @@ if(isAllocator!BucketAllocator && isAllocator!EntryAllocator){
 	/**
 	Destroy & deallocate this associative array, which must have been previously allocated with `allocator`.
 	*/
-	void dispose(AAAllocator)(auto ref AAAllocator aaAllocator){
+	void dispose(AAAllocator)(scope auto ref AAAllocator aaAllocator){
 		impl.assertWasInit();
 		clear();
 		impl.bucketAllocator.dispose(impl.buckets);
@@ -441,7 +442,7 @@ if(isAllocator!BucketAllocator && isAllocator!EntryAllocator){
 		
 		return Result(Range(impl));
 	}
-
+	
 	inout(Value) get(D)(scope auto ref const Key key, scope D defaultValue) inout
 	if(is(typeof(defaultValue()): inout(Value))){
 		auto valuePtr = impl.inX(key);
@@ -451,9 +452,9 @@ if(isAllocator!BucketAllocator && isAllocator!EntryAllocator){
 	ref Value require(V)(scope auto ref const Key key, scope V value)
 	if(is(typeof(value()): Value)){
 		auto p = impl.getX(key);
-		if(p.found)
+		if(p.found){
 			return *p.value;
-		else{
+		}else{
 			/* Not `return (*p = value)`, since if `=` is overloaded
 			this might not return a ref to the left-hand side. */
 			*p.value = value();
@@ -489,9 +490,9 @@ struct AABucket(K, V){
 	Entry* entry;
 	
 	pragma(inline,true) nothrow @nogc pure @safe{
-		@property bool empty() const   => hash == HASH_EMPTY;
+		@property bool empty() const => hash == HASH_EMPTY;
 		@property bool deleted() const => hash == HASH_DELETED;
-		@property bool filled() const  => cast(ptrdiff_t)hash < 0;
+		@property bool filled() const => cast(ptrdiff_t)hash < 0;
 	}
 }
 
@@ -605,12 +606,14 @@ unittest{
 		update: (int _) => 51,
 	);
 	assert(aa["fifty"] == 50);
+	int fiftyOne;
 	aa.update(
 		key: "fifty",
 		create: () => 50,
-		update: (ref int i){ i = 51; },
+		update: (ref int i){ i = 51; fiftyOne = i; },
 	);
 	assert(aa["fifty"] == 51);
+	assert(fiftyOne == 51);
 	{
 		auto aaCmp = makeAA(gcAlloc, gcAlloc, cAlloc, "twenty",20, "fifty",51);
 		scope(exit) aaCmp.dispose(gcAlloc);
@@ -662,11 +665,11 @@ unittest{
 }
 
 private size_t nextPow2(const size_t n) nothrow @nogc pure @safe{
-	if(!n) return 1;
-	
-	const isPowerOf2 = !((n - 1) & n);
-	import core.bitop: bsr;
-	return 1 << (bsr(n) + !isPowerOf2);
+	if(n){
+		const isPowerOf2 = !((n - 1) & n);
+		import core.bitop: bsr;
+		return 1 << (bsr(n) + !isPowerOf2);
+	}else return 1;
 }
 
 nothrow @nogc pure @safe unittest{
