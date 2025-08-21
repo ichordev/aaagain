@@ -29,10 +29,12 @@ private enum HASH_FILLED_MARK = size_t(1) << 8 * size_t.sizeof - 1;
 enum isAA(T) = is(T: AA!(K, V, BA, EA, params), K, V, BA, EA, AAParams params);
 enum isAA(T, Key, Value) = is(T: AA!(K, V, BA, EA, params), K: Key, V: Value, BA, EA, AAParams params);
 
-struct AA(K, V, BucketAllocator=GCAllocator, EntryAllocator=GCAllocator, AAParams params=AAParams.init)
-if(isAllocator!BucketAllocator && isAllocator!EntryAllocator){
+struct AA(K, V, BucketAlloc=GCAllocator, EntryAlloc=GCAllocator, AAParams params=AAParams.init)
+if(isAllocator!BucketAlloc && isAllocator!EntryAlloc){
 	alias Key = K;
 	alias Value = V;
+	alias BucketAllocator = BucketAlloc;
+	alias EntryAllocator = EntryAlloc;
 	
 	static assert(!__traits(hasPostblit, Key), "Postblits are unsupported");
 	static assert(!__traits(hasPostblit, Value), "Postblits are unsupported");
@@ -43,9 +45,9 @@ if(isAllocator!BucketAllocator && isAllocator!EntryAllocator){
 	enum initialLoad = (params.growDenominator * params.shrink + params.grow * params.shrinkDenominator) / 2;
 	enum initialLoadDenominator = params.shrinkDenominator * params.growDenominator;
 	
-	private alias Bucket = AABucket!(Key, Value);
+	alias Bucket = AABucket!(Key, Value);
 	
-	private alias Entry = Bucket.Entry;
+	alias Entry = Bucket.Entry;
 	
 	private struct Impl{
 		enum initialBucketCount = params.growFactor * 2;
@@ -58,7 +60,7 @@ if(isAllocator!BucketAllocator && isAllocator!EntryAllocator){
 			uint firstUsed;
 		}
 		
-		this()(auto ref BucketAllocator bucketAllocator, auto ref EntryAllocator entryAllocator, size_t size=initialBucketCount){
+		this(ref BucketAllocator bucketAllocator, ref EntryAllocator entryAllocator, size_t size=initialBucketCount){
 			this.bucketAllocator = bucketAllocator;
 			this.entryAllocator = entryAllocator;
 			this.buckets = this.bucketAllocator.newArray!Bucket(size);
@@ -186,6 +188,7 @@ if(isAllocator!BucketAllocator && isAllocator!EntryAllocator){
 		}
 	}
 	package Impl* impl;
+	enum sizeOfImpl = Impl.sizeof;
 	
 	/**
 	Allocate a new associative array. `aaAllocator` must be used to `dispose` of this associative array later.
@@ -223,8 +226,11 @@ if(isAllocator!BucketAllocator && isAllocator!EntryAllocator){
 	}
 	
 	pragma(inline,true){
-		@property size_t length() const =>
+		@property size_t length() const nothrow @nogc pure @safe =>
 			impl !is null ? impl.length : 0;
+		
+		bool opCast(T: bool)() const nothrow @nogc pure @safe =>
+			impl !is null;
 		
 		inout(Value)* opBinaryRight(string op: "in")(scope auto ref const Key key) inout =>
 			impl.inX(key);
@@ -448,6 +454,9 @@ if(isAllocator!BucketAllocator && isAllocator!EntryAllocator){
 		auto valuePtr = impl.inX(key);
 		return valuePtr ? *valuePtr : defaultValue();
 	}
+	
+	ref Value require()(scope auto ref const Key key) =>
+		*impl.getX(key).value;
 	
 	ref Value require(V)(scope auto ref const Key key, scope V value)
 	if(is(typeof(value()): Value)){
