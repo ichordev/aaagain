@@ -186,6 +186,22 @@ if(isAllocator!BucketAlloc && isAllocator!EntryAlloc){
 			//return pointer to value
 			return Result(&p.entry.value);
 		}
+		
+		void deallocate(bool runDestructors)() nothrow{
+			deallocateAllEntries!runDestructors();
+			this.bucketAllocator.deallocate(buckets);
+		}
+		
+		void deallocateAllEntries(bool runDestructors)(){
+			foreach(ref bucket; buckets[firstUsed..$]){
+				if(bucket.filled){
+					static if(runDestructors)
+						this.entryAllocator.dispose(bucket.entry);
+					else
+						this.entryAllocator.deallocate((() @trusted => bucket.entry[0..1])());
+				}
+			}
+		}
 	}
 	Impl* impl;
 	
@@ -219,9 +235,20 @@ if(isAllocator!BucketAlloc && isAllocator!EntryAlloc){
 	*/
 	void dispose(AAAllocator)(scope auto ref AAAllocator aaAllocator){
 		impl.assertWasInit();
-		clear();
-		impl.bucketAllocator.dispose(impl.buckets);
-		aaAllocator.dispose(impl);
+		impl.deallocate!true();
+		aaAllocator.deallocate((() @trusted => impl[0..1])());
+		impl = null;
+	}
+	
+	/**
+	Deallocate this associative array, which must have been previously allocated with `allocator`,
+	without calling any destructors.
+	*/
+	void deallocate(AAAllocator)(scope auto ref AAAllocator aaAllocator){
+		impl.assertWasInit();
+		impl.deallocate!false();
+		aaAllocator.deallocate((() @trusted => impl[0..1])());
+		impl = null;
 	}
 	
 	pragma(inline,true){
@@ -340,10 +367,7 @@ if(isAllocator!BucketAlloc && isAllocator!EntryAlloc){
 		
 		import core.stdc.string: memset;
 		//clear all data, but don't change bucket array length
-		foreach(ref bucket; impl.buckets[impl.firstUsed..$]){
-			if(bucket.filled)
-				impl.entryAllocator.dispose(bucket.entry);
-		}
+		impl.deallocateAllEntries!true();
 		memset(&impl.buckets[impl.firstUsed], 0, (impl.buckets.length - impl.firstUsed) * Bucket.sizeof);
 		impl.deleted = impl.used = 0;
 		impl.firstUsed = cast(uint)impl.buckets.length;
@@ -654,7 +678,7 @@ unittest{
 		aa[i.to!string()] = i;
 	{
 		auto aaCmp = makeAA(cAlloc, gcAlloc, gcAlloc, "twenty",20, "0",0, "1",1, "2",2, "3",3, "4",4, "5",5, "6",6, "7",7, "8",8, "9",9);
-		scope(exit) aaCmp.dispose(cAlloc);
+		scope(exit) aaCmp.deallocate(cAlloc);
 		assert(aa == aaCmp);
 	}
 	
