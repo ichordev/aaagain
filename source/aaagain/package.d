@@ -187,8 +187,7 @@ if(isAllocator!BucketAlloc && isAllocator!EntryAlloc){
 			return Result(&p.entry.value);
 		}
 	}
-	package Impl* impl;
-	enum sizeOfImpl = Impl.sizeof;
+	Impl* impl;
 	
 	/**
 	Allocate a new associative array. `aaAllocator` must be used to `dispose` of this associative array later.
