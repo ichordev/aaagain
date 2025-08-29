@@ -231,25 +231,18 @@ if(isAllocator!BucketAlloc && isAllocator!EntryAlloc){
 	}
 	
 	/**
-	Destroy & deallocate this associative array, which must have been previously allocated with `allocator`.
+	Destroy this associative array if `runDestructors` is `true`, and then deallocate it with
+	`aaAllocator`, which must be the allocator that allocated the associative array.
 	*/
-	void dispose(AAAllocator)(scope auto ref AAAllocator aaAllocator){
+	void dispose(bool runDestructors=true, AAAllocator)(scope auto ref AAAllocator aaAllocator){
 		impl.assertWasInit();
-		impl.deallocate!true();
+		impl.deallocate!runDestructors();
 		aaAllocator.deallocate((() @trusted => impl[0..1])());
 		impl = null;
 	}
 	
-	/**
-	Deallocate this associative array, which must have been previously allocated with `allocator`,
-	without calling any destructors.
-	*/
-	void deallocate(AAAllocator)(scope auto ref AAAllocator aaAllocator){
-		impl.assertWasInit();
-		impl.deallocate!false();
-		aaAllocator.deallocate((() @trusted => impl[0..1])());
-		impl = null;
-	}
+	deprecated("Use `dispose!false` instead")
+	void deallocate(AAAllocator)(scope auto ref AAAllocator aaAllocator){ dispose!false(aaAllocator); }
 	
 	pragma(inline,true){
 		@property size_t length() const nothrow @nogc pure @safe =>
@@ -302,12 +295,12 @@ if(isAllocator!BucketAlloc && isAllocator!EntryAlloc){
 		return hash;
 	}
 	
-	bool remove()(scope auto ref const Key key){
+	bool remove(bool runDestructors=true)(scope auto ref const Key key){
 		if(!impl.empty){
 			if(auto p = impl.findSlotLookup(impl.calcHash(key), key)){
 				//clear entry
 				p.hash = HASH_DELETED;
-				impl.entryAllocator.dispose(p.entry);
+				impl.entryAllocator.dispose!runDestructors(p.entry);
 				p.entry = null;
 				
 				++impl.deleted;
