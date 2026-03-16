@@ -260,15 +260,15 @@ if(isAllocator!BucketAlloc && isAllocator!EntryAlloc){
 			onRangeError();
 		}
 		
-		Value opIndexAssign()(auto ref Value value, scope auto ref const Key key) nothrow =>
+		ref opIndexAssign()(auto ref Value value, scope auto ref const Key key) nothrow =>
 			*impl.getX(key).value = value;
 	}
 	
 	bool opEquals(AAT)(scope const AAT rhs) const
 	if(isAA!(AAT, Key, Value)){
-		if(impl.empty){
-			return rhs.impl.empty;
-		}else if(impl is cast(void*)rhs.impl || impl.length != rhs.impl.length){
+		if(impl.length != rhs.impl.length){
+			return false;
+		}else if(impl is cast(void*)rhs.impl){
 			return true;
 		}
 		foreach(b1; impl.buckets){ //compare the entries:
