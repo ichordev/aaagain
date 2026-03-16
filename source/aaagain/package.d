@@ -254,14 +254,19 @@ if(isAllocator!BucketAlloc && isAllocator!EntryAlloc){
 		inout(Value)* opBinaryRight(string op: "in")(scope auto ref const Key key) inout =>
 			impl.inX(key);
 		
-		inout(Value) opIndex()(scope auto ref const Key key) inout{
+		ref opIndex()(scope auto ref const Key key) inout{
 			if(auto ret = impl.inX(key))
 				return *ret;
 			onRangeError();
 		}
 		
-		ref opIndexAssign()(auto ref Value value, scope auto ref const Key key) nothrow =>
-			*impl.getX(key).value = value;
+		ref opIndexAssign()(auto ref Value value, scope auto ref const Key key) nothrow{
+			auto retVal = impl.getX(key).value;
+			/* Not `return (*retVal = value)`, since if `=` is overloaded
+			this might not return a ref to the left-hand side. */
+			*retVal = value;
+			return *retVal;
+		}
 	}
 	
 	bool opEquals(AAT)(scope const AAT rhs) const
